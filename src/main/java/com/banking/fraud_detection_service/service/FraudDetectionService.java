@@ -1,6 +1,7 @@
 package com.banking.fraud_detection_service.service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -9,6 +10,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
+
+import com.banking.fraud_detection_service.client.AccountServiceClient;
+import com.banking.fraud_detection_service.model.FraudCheckResult;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -25,8 +29,15 @@ public class FraudDetectionService {
 
    private final RedisTemplate<String, String> redisTemplate;
    
-   @Value("${fraud.max-transaction-per-minute")
+   @Value("${fraud.max-transaction-per-minute}")
    private  int maxTransactionPerMinute;
+    
+   @Value("${fraud.suspicious-amount-multiplier}")
+   private double suspiciousAmountMultiplier;
+   
+   @Value("${fraud.max-balance-percentage}")
+   private double maxBalancePercentage;
+
     public void checkTransaction(Map<String, Object> payload){ 
          String transactionId = (String) payload.get("transactionId");
          String accountNumber = (String)payload.get("senderAccountNumber");
@@ -86,6 +97,37 @@ public class FraudDetectionService {
         log.info("Velocity check - account: {} count: {}/{}", accountNumber, count, maxTransactionPerMinute);
 
         return count != null && count > maxTransactionPerMinute;
+    }
+
+    private boolean isAmountSuspicious(String accountNumber, BigDecimal amount){
+        String avgKey = "fraud:avg_amount" + accountNumber;
+        String avgStr =  redisTemplate.opsForValue().get(avgKey);
+
+        if(avgStr == null){
+            redisTemplate.opsForValue().set(avgKey, amount.toString());
+            return false;
+        }
+
+        BigDecimal avgAmount = new BigDecimal(avgStr);
+        BigDecimal threshold = avgAmount.multiply(
+            BigDecimal.valueOf(suspiciousAmountMultiplier)
+        );
+        // update running average
+        BigDecimal newAvg = avgAmount.add(amount).divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP );
+        redisTemplate.opsForValue().set(avgKey, newAvg.toString());
+
+        log.info("Amount check - amount: {} threshold: {} suspicious: {}", amount, threshold, amount.compareTo(threshold)>0);
+        
+        return amount.compareTo(threshold)>0;
+
+    }
+
+    private boolean isBalanceCheckFailed(BigDecimal senderBalance, BigDecimal amount){
+      BigDecimal maxAllowed = senderBalance.multiply(
+        BigDecimal.valueOf(maxBalancePercentage));
+        log.info("Balance check - amount: {} maxAllowed: {} suspicious: {}", amount, maxAllowed, amount.compareTo(maxAllowed) > 0);
+
+        return amount.compareTo(maxAllowed) > 0;
     }
 
 }

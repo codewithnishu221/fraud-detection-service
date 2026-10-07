@@ -4,3 +4,9 @@ spring:
 
 fraud:
   max-transaction-per-minute: 5
+  suspicious-amount-multiplier: 5
+  max-balance-percentage: 0.90
+
+account:
+  service:
+      url: http://localhost:8081
